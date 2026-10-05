@@ -1,65 +1,50 @@
+
 name: Linux Cloud RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-
-      - name: 1. Install XFCE + XRDP
+      - name: 1. Update system and install RDP
         run: |
-          sudo apt-get update -y
-
+          sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             xrdp \
             xfce4 \
             xfce4-goodies \
-            dbus-x11 \
-            openssl
+            dbus-x11
 
           sudo systemctl enable xrdp
-          sudo systemctl start xrdp
+          sudo systemctl restart xrdp
 
       - name: 2. Create RDP User
-        id: credentials
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          USERNAME="NvDAdmin"
+          sudo useradd -m -s /bin/bash NvDAdmin || true
+          echo "NvDAdmin:$RDP_PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo NvDAdmin
 
-          # Generate exactly 8 characters
-          PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 8)
+          echo "startxfce4" | sudo tee /home/NvDAdmin/.xsession
+          sudo chown NvDAdmin:NvDAdmin /home/NvDAdmin/.xsession
+          sudo chmod 600 /home/NvDAdmin/.xsession
 
-          sudo useradd -m -s /bin/bash "$USERNAME" 2>/dev/null || true
-
-          echo "$USERNAME:$PASSWORD" | sudo chpasswd
-
-          sudo usermod -aG sudo "$USERNAME"
-
-          echo "startxfce4" | sudo tee /home/$USERNAME/.xsession > /dev/null
-
-          sudo chown "$USERNAME:$USERNAME" /home/$USERNAME/.xsession
-          sudo chmod 600 /home/$USERNAME/.xsession
-
-          echo "USERNAME=$USERNAME" >> "$GITHUB_OUTPUT"
-          echo "PASSWORD=$PASSWORD" >> "$GITHUB_OUTPUT"
-
-      - name: 3. Configure XRDP
+      - name: 3. Configure XFCE for XRDP
         run: |
-          sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
-          #!/bin/sh
+          sudo sed -i 's/^test -x/#test -x/' /etc/xrdp/startwm.sh
+          sudo sed -i 's/^exec/#exec/' /etc/xrdp/startwm.sh
 
-          export XDG_SESSION_DESKTOP=xfce
+          sudo tee -a /etc/xrdp/startwm.sh > /dev/null <<'EOF'
           export XDG_CURRENT_DESKTOP=XFCE
           export XDG_CONFIG_DIRS=/etc/xdg/xdg-xfce:/etc/xdg
           export XDG_DATA_DIRS=/usr/share/xfce4:/usr/share
-
-          exec startxfce4
+          startxfce4
           EOF
-
-          sudo chmod +x /etc/xrdp/startwm.sh
 
           sudo systemctl restart xrdp
 
@@ -67,46 +52,28 @@ jobs:
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          if [ -z "$TAILSCALE_AUTHKEY" ]; then
-            echo "ERROR: TAILSCALE_AUTHKEY is missing!"
-            echo "Add your Tailscale Auth Key to GitHub Secrets."
-            exit 1
-          fi
-
           curl -fsSL https://tailscale.com/install.sh | sh
 
           sudo tailscale up \
-            --auth-key="$TAILSCALE_AUTHKEY" \
+            --auth-key="${TAILSCALE_AUTHKEY}" \
             --hostname="github-linux-rdp"
 
           sleep 5
 
-      - name: 5. Show RDP Information
-        run: |
-          TAILSCALE_IP=$(sudo tailscale ip -4)
+          TS_IP=$(tailscale ip -4)
 
           echo ""
           echo "=================================================="
-          echo "              LINUX RDP READY"
+          echo "       >>> LINUX RDP SERVER READY <<<"
           echo "=================================================="
-          echo ""
-          echo "Tailscale IP : $TAILSCALE_IP"
-          echo ""
-          echo "Username     : ${{ steps.credentials.outputs.USERNAME }}"
-          echo ""
-          echo "Password     : ${{ steps.credentials.outputs.PASSWORD }}"
-          echo ""
+          echo "Tailscale IP : $TS_IP"
+          echo "Username     : NvDAdmin"
           echo "RDP Port     : 3389"
-          echo ""
-          echo "=================================================="
-          echo "Connect with Microsoft Remote Desktop"
           echo "=================================================="
 
-      - name: 6. Keep Server Alive
+      - name: 5. Keep Server Alive
         run: |
-          echo "RDP server is running..."
-
-          while true; do
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Server running..."
+          for i in $(seq 1 360); do
             sleep 60
+            echo "[$i/360] Linux RDP running..."
           done
