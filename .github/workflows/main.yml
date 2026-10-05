@@ -11,7 +11,7 @@ jobs:
 
     steps:
 
-      - name: 1. Install Desktop and RDP
+      - name: 1. Install RDP Desktop
         run: |
           sudo apt-get update -y
 
@@ -25,20 +25,36 @@ jobs:
           sudo systemctl enable xrdp
           sudo systemctl start xrdp
 
-      - name: 2. Create RDP User
+      - name: 2. Check RDP Password Secret
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
+          echo "Checking RDP_PASSWORD..."
+
           if [ -z "$RDP_PASSWORD" ]; then
-            echo "ERROR: RDP_PASSWORD secret is missing!"
+            echo "ERROR: RDP_PASSWORD secret is EMPTY or does not exist."
+            echo "Go to:"
+            echo "Settings -> Secrets and variables -> Actions"
+            echo "and create a secret named exactly:"
+            echo "RDP_PASSWORD"
             exit 1
           fi
 
-          if [ ${#RDP_PASSWORD} -ne 8 ]; then
-            echo "ERROR: RDP_PASSWORD must be exactly 8 characters!"
+          PASSWORD_LENGTH=${#RDP_PASSWORD}
+
+          echo "Password length: $PASSWORD_LENGTH"
+
+          if [ "$PASSWORD_LENGTH" -ne 8 ]; then
+            echo "ERROR: RDP_PASSWORD must be exactly 8 characters."
             exit 1
           fi
 
+          echo "RDP_PASSWORD is valid."
+
+      - name: 3. Create RDP User
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
           USERNAME="NvDAdmin"
 
           sudo useradd -m -s /bin/bash "$USERNAME" 2>/dev/null || true
@@ -47,16 +63,18 @@ jobs:
 
           sudo usermod -aG sudo "$USERNAME"
 
-          sudo mkdir -p /home/$USERNAME
+          sudo mkdir -p "/home/$USERNAME"
 
-          sudo tee /home/$USERNAME/.xsession > /dev/null <<'EOF'
+          sudo tee "/home/$USERNAME/.xsession" > /dev/null <<'EOF'
           xfce4-session
           EOF
 
-          sudo chown $USERNAME:$USERNAME /home/$USERNAME/.xsession
-          sudo chmod 600 /home/$USERNAME/.xsession
+          sudo chown "$USERNAME:$USERNAME" "/home/$USERNAME/.xsession"
+          sudo chmod 600 "/home/$USERNAME/.xsession"
 
-      - name: 3. Configure XRDP
+          echo "RDP user created successfully."
+
+      - name: 4. Configure XRDP
         run: |
           sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
           #!/bin/sh
@@ -83,17 +101,17 @@ jobs:
 
           sudo systemctl restart xrdp
 
-          sleep 5
+          sleep 3
 
           echo "XRDP status:"
-          sudo systemctl --no-pager status xrdp || true
+          sudo systemctl is-active xrdp
 
-      - name: 4. Install Tailscale
+      - name: 5. Install Tailscale
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           if [ -z "$TAILSCALE_AUTHKEY" ]; then
-            echo "ERROR: TAILSCALE_AUTHKEY secret is missing!"
+            echo "ERROR: TAILSCALE_AUTHKEY secret is missing."
             exit 1
           fi
 
@@ -105,7 +123,7 @@ jobs:
 
           sleep 5
 
-      - name: 5. Show RDP Information
+      - name: 6. Show RDP Information
         run: |
           TAILSCALE_IP=$(sudo tailscale ip -4)
 
@@ -115,16 +133,14 @@ jobs:
           echo "=================================================="
           echo ""
           echo "Tailscale IP : $TAILSCALE_IP"
-          echo ""
           echo "Username     : NvDAdmin"
-          echo ""
-          echo "Password     : [FROM GITHUB SECRET]"
-          echo ""
           echo "RDP Port     : 3389"
+          echo ""
+          echo "Password     : GitHub Secret RDP_PASSWORD"
           echo ""
           echo "=================================================="
 
-      - name: 6. Keep Server Alive
+      - name: 7. Keep Server Alive
         run: |
           while true; do
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] RDP server running..."
