@@ -4,75 +4,112 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  rdp:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
 
     steps:
-      - name: 1. Update system and install RDP
+
+      - name: 1. Update System
         run: |
-          sudo apt-get update
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+
+      - name: 2. Install XFCE and XRDP
+        run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             xrdp \
             xfce4 \
             xfce4-goodies \
-            dbus-x11
+            dbus-x11 \
+            openssl
 
           sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
+          sudo systemctl start xrdp
 
-      - name: 2. Create RDP User
-        env:
-          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+      - name: 3. Create RDP User and Password
+        id: credentials
         run: |
-          sudo useradd -m -s /bin/bash NvDAdmin || true
-          echo "NvDAdmin:$RDP_PASSWORD" | sudo chpasswd
-          sudo usermod -aG sudo NvDAdmin
+          USERNAME="NvDAdmin"
 
-          echo "startxfce4" | sudo tee /home/NvDAdmin/.xsession
-          sudo chown NvDAdmin:NvDAdmin /home/NvDAdmin/.xsession
-          sudo chmod 600 /home/NvDAdmin/.xsession
+          PASSWORD=$(openssl rand -base64 20 | tr -dc 'A-Za-z0-9' | head -c 12)
 
-      - name: 3. Configure XFCE for XRDP
+          sudo useradd -m -s /bin/bash "$USERNAME" 2>/dev/null || true
+
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+
+          sudo usermod -aG sudo "$USERNAME"
+
+          echo "startxfce4" | sudo tee "/home/$USERNAME/.xsession" > /dev/null
+          sudo chown "$USERNAME:$USERNAME" "/home/$USERNAME/.xsession"
+          sudo chmod 600 "/home/$USERNAME/.xsession"
+
+          echo "USERNAME=$USERNAME" >> "$GITHUB_OUTPUT"
+          echo "PASSWORD=$PASSWORD" >> "$GITHUB_OUTPUT"
+
+      - name: 4. Configure XRDP
         run: |
-          sudo sed -i 's/^test -x/#test -x/' /etc/xrdp/startwm.sh
-          sudo sed -i 's/^exec/#exec/' /etc/xrdp/startwm.sh
+          sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
+          #!/bin/sh
 
-          sudo tee -a /etc/xrdp/startwm.sh > /dev/null <<'EOF'
+          export XDG_SESSION_DESKTOP=xfce
           export XDG_CURRENT_DESKTOP=XFCE
           export XDG_CONFIG_DIRS=/etc/xdg/xdg-xfce:/etc/xdg
           export XDG_DATA_DIRS=/usr/share/xfce4:/usr/share
-          startxfce4
+
+          exec startxfce4
           EOF
 
+          sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl restart xrdp
 
-      - name: 4. Install Tailscale
+      - name: 5. Install Tailscale
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
+          if [ -z "$TAILSCALE_AUTHKEY" ]; then
+            echo "ERROR: TAILSCALE_AUTHKEY secret is missing."
+            exit 1
+          fi
+
           curl -fsSL https://tailscale.com/install.sh | sh
 
           sudo tailscale up \
-            --auth-key="${TAILSCALE_AUTHKEY}" \
+            --auth-key="$TAILSCALE_AUTHKEY" \
             --hostname="github-linux-rdp"
 
-          sleep 5
+      - name: 6. Get Tailscale IP
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "       LINUX RDP IS READY"
+          echo "=========================================="
+          echo ""
 
-          TS_IP=$(tailscale ip -4)
+          echo "RDP IP:"
+          sudo tailscale ip -4
 
           echo ""
-          echo "=================================================="
-          echo "       >>> LINUX RDP SERVER READY <<<"
-          echo "=================================================="
-          echo "Tailscale IP : $TS_IP"
-          echo "Username     : NvDAdmin"
-          echo "RDP Port     : 3389"
-          echo "=================================================="
+          echo "RDP USERNAME:"
+          echo "NvDAdmin"
 
-      - name: 5. Keep Server Alive
+          echo ""
+          echo "RDP PASSWORD:"
+          echo "${{ steps.credentials.outputs.PASSWORD }}"
+
+          echo ""
+          echo "RDP PORT:"
+          echo "3389"
+
+          echo ""
+          echo "=========================================="
+          echo "Connect using Microsoft Remote Desktop"
+          echo "=========================================="
+
+      - name: 7. Keep RDP Alive
         run: |
-          for i in $(seq 1 360); do
+          echo "RDP server is running..."
+
+          while true; do
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] RDP still running..."
             sleep 60
-            echo "[$i/360] Linux RDP running..."
           done
